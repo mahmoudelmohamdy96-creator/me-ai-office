@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+#hud{position:fixed;top:16px;left:16px;width:330px;background:linear-gradient(160deg,rgba(13,17,27,.92),rgba(8,11,18,.88));border:1px solid rgba(110,168,255,.28);border-radius:14px;padding:14px 16px 10px;font-family:'Segoe UI',Inter,Arial,sans-serif;color:#dfe6f5;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);z-index:10;box-shadow:0 12px 40px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.05)}
+#hud-head{display:flex;align-items:center;font-size:11px;letter-spacing:2.5px;color:#8fa3cc;font-weight:600}
+#dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff5252;margin-right:8px;box-shadow:0 0 8px #ff5252;animation:blink 1.4s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+#hud-headline{font-size:16px;font-weight:600;color:#ffd75e;margin:10px 0 4px;letter-spacing:.2px;line-height:1.35}
+.hud-row{display:flex;align-items:center;gap:10px;font-size:12px;padding:7px 0;border-top:1px solid rgba(255,255,255,.05)}
+.hud-row .agent{display:flex;align-items:center;gap:7px;min-width:86px;font-weight:600;color:#f2f5fb;letter-spacing:.4px}
+.hud-row .cdot{width:7px;height:7px;border-radius:50%;flex:none}
+.hud-row .task{flex:1;color:#93a1bd;font-size:11.5px;line-height:1.3;text-align:left}
+.pill{flex:none;font-size:9px;font-weight:700;letter-spacing:1px;padding:3px 8px;border-radius:20px}
+.pill-WORKING{background:rgba(55,217,154,.14);color:#37d99a;border:1px solid rgba(55,217,154,.4)}
+.pill-LIVE{background:rgba(255,82,82,.14);color:#ff7070;border:1px solid rgba(255,82,82,.45)}
+.pill-READY{background:rgba(124,138,165,.12);color:#8b99b5;border:1px solid rgba(124,138,165,.3)}
+#hud-updated{font-size:10px;color:#5f6b88;margin-top:8px;letter-spacing:.3px}
+#hud-hint{display:none;font-size:10px;color:#6b7794;margin-top:6px;letter-spacing:.5px}
+#vignette{position:fixed;inset:0;pointer-events:none;z-index:5;background:radial-gradient(ellipse at center,transparent 55%,rgba(3,5,10,.55) 100%)}
+@media (max-width:640px){
+#hud{top:auto;bottom:12px;left:12px;right:12px;width:auto;padding:12px 14px 8px;max-height:48vh;overflow-y:auto}
+#hud-headline{font-size:14px;margin:8px 0 2px}
+.hud-row{padding:6px 0}
+#hud-rows{display:none;margin-top:4px}
+#hud.open #hud-rows{display:block}
+#hud-hint{display:block}
+#hud.open #hud-hint{display:none}
+#hud-updated{margin-top:6px}
+}
+</style>
+</head>
+<body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ================= ME AI OFFICE =================
+// Original scene: Mahmoud's team of AI helpers working at desks.
+
+const W = window.innerWidth, H = window.innerHeight;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07090f);
+scene.fog = new THREE.Fog(0x07090f, 26, 60);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(W, H);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 120);
+
+// ---------- helpers ----------
+function canvasTexture(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.anisotropy = 4;
+  return t;
+}
+
+function textSprite(text, opts = {}) {
+  const scale = opts.scale || 1;
+  const t = canvasTexture(512, 128, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    if (opts.bg) {
+      g.fillStyle = opts.bg;
+      const r = 40;
+      g.beginPath();
+      g.moveTo(r, 8); g.lineTo(w - r, 8); g.quadraticCurveTo(w - 8, 8, w - 8, r);
+      g.lineTo(w - 8, h - r); g.quadraticCurveTo(w - 8, h - 8, w - r, h - 8);
+      g.lineTo(r, h - 8); g.quadraticCurveTo(8, h - 8, 8, h - r);
+      g.lineTo(8, r); g.quadraticCurveTo(8, 8, r, 8);
+      g.fill();
+    }
+    g.font = 'bold ' + (opts.fontSize || 72) + 'px Arial, sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    if (opts.glow) { g.shadowColor = opts.color || '#fff'; g.shadowBlur = 24; }
+    g.fillStyle = opts.color || '#ffffff';
+    g.fillText(text, w / 2, h / 2 + 4);
+  });
+  const m = new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false });
+  const s = new THREE.Sprite(m);
+  s.scale.set(2.6 * scale, 0.65 * scale, 1);
+  return s;
+}
+
+// ---------- room ----------
+const room = new THREE.Group();
+scene.add(room);
+
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x11141d, roughness: 0.85, metalness: 0.15 });
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(34, 26), floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+room.add(floor);
+
+// subtle floor grid glow
+const grid = new THREE.GridHelper(34, 34, 0x1d2740, 0x161d31);
+grid.position.y = 0.01;
+room.add(grid);
+
+const wallMat = new THREE.MeshStandardMaterial({ color: 0x0d1017, roughness: 0.95 });
+const backWall = new THREE.Mesh(new THREE.PlaneGeometry(34, 12), wallMat);
+backWall.position.set(0, 6, -13); backWall.receiveShadow = true;
+room.add(backWall);
+const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(26, 12), wallMat);
+leftWall.rotation.y = Math.PI / 2; leftWall.position.set(-17, 6, 0); leftWall.receiveShadow = true;
+room.add(leftWall);
+const rightWall = new THREE.Mesh(new THREE.PlaneGeometry(26, 12), wallMat);
+rightWall.rotation.y = -Math.PI / 2; rightWall.position.set(17, 6, 0);
+room.add(rightWall);
+
+// ---------- lighting ----------
+scene.add(new THREE.AmbientLight(0x8899bb, 0.85));
+const hemi = new THREE.HemisphereLight(0x8fa3cc, 0x1a2030, 0.5);
+scene.add(hemi);
+const key = new THREE.DirectionalLight(0xcfd8ff, 0.5);
+key.position.set(6, 12, 8);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -18; key.shadow.camera.right = 18;
+key.shadow.camera.top = 18; key.shadow.camera.bottom = -18;
+scene.add(key);
+const blueGlow = new THREE.PointLight(0x3b82f6, 0.9, 30);
+blueGlow.position.set(-8, 6, -6);
+scene.add(blueGlow);
+const warmGlow = new THREE.PointLight(0xff9a3c, 0.5, 26);
+warmGlow.position.set(9, 5, -4);
+scene.add(warmGlow);
+
+// ---------- furniture / characters ----------
+const deskMat = new THREE.MeshStandardMaterial({ color: 0x2a2f3d, roughness: 0.6, metalness: 0.2 });
+const deskTopMat = new THREE.MeshStandardMaterial({ color: 0x3a4152, roughness: 0.45, metalness: 0.25 });
+
+function makeDesk() {
+  const g = new THREE.Group();
+  const top = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.12, 1.2), deskTopMat);
+  top.position.y = 1.05; top.castShadow = true; top.receiveShadow = true;
+  g.add(top);
+  [[-1.1, -0.5], [1.1, -0.5], [-1.1, 0.5], [1.1, 0.5]].forEach(([x, z]) => {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.0, 0.09), deskMat);
+    leg.position.set(x, 0.5, z); leg.castShadow = true;
+    g.add(leg);
+  });
+  return g;
+}
+
+function makeMonitor(screenTex) {
+  const g = new THREE.Group();
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.72, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0x14171f, roughness: 0.4, metalness: 0.4 }));
+  frame.position.y = 0.55; frame.castShadow = true;
+  g.add(frame);
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(1.06, 0.63),
+    new THREE.MeshBasicMaterial({ map: screenTex }));
+  screen.position.set(0, 0.55, 0.035);
+  g.add(screen);
+  const stand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.35, 0.08), deskMat);
+  stand.position.y = 0.17; g.add(stand);
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.04, 0.28), deskMat);
+  base.position.y = 0.02; g.add(base);
+  return g;
+}
+
+function codeTexture(accent, seed) {
+  return canvasTexture(256, 152, (g, w, h) => {
+    g.fillStyle = '#0a0e16'; g.fillRect(0, 0, w, h);
+    const cols = [accent, '#4c566a', '#88c0d0', '#a3be8c', accent, '#5e81ac'];
+    let rnd = seed;
+    const rand = () => { rnd = (rnd * 16807) % 2147483647; return rnd / 2147483647; };
+    for (let y = 12; y < h - 8; y += 11) {
+      let x = 10 + rand() * 30;
+      const parts = 2 + Math.floor(rand() * 3);
+      for (let p = 0; p < parts && x < w - 20; p++) {
+        const len = 20 + rand() * 55;
+        g.fillStyle = cols[Math.floor(rand() * cols.length)];
+        g.globalAlpha = 0.55 + rand() * 0.45;
+        g.fillRect(x, y, Math.min(len, w - x - 8), 6);
+        x += len + 8;
+      }
+    }
+  });
+}
+
+// simple stylized robot avatar
+function makeBot(color, accent) {
+  const g = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.25, emissive: color, emissiveIntensity: 0.35 });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.30, 0.38, 0.62, 20), bodyMat);
+  body.position.y = 0.85; body.castShadow = true;
+  g.add(body);
+  const chest = new THREE.Mesh(new THREE.CircleGeometry(0.09, 16),
+    new THREE.MeshBasicMaterial({ color: accent }));
+  chest.position.set(0, 0.92, 0.365);
+  g.add(chest);
+
+  const headGrp = new THREE.Group();
+  headGrp.position.y = 1.48;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.30, 24, 20), bodyMat);
+  head.scale.set(1, 0.92, 0.95); head.castShadow = true;
+  headGrp.add(head);
+  // visor eyes
+  const visor = new THREE.Mesh(new THREE.SphereGeometry(0.24, 20, 14, -0.9, 1.8, 1.15, 0.85),
+    new THREE.MeshBasicMaterial({ color: accent }));
+  visor.position.z = 0.09;
+  headGrp.add(visor);
+  // antenna
+  const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.22), bodyMat);
+  ant.position.y = 0.36; headGrp.add(ant);
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8),
+    new THREE.MeshBasicMaterial({ color: accent }));
+  tip.position.y = 0.48; headGrp.add(tip);
+  g.add(headGrp);
+
+  // arms (animated typing)
+  const arms = [];
+  [-1, 1].forEach(side => {
+    const pivot = new THREE.Group();
+    pivot.position.set(side * 0.36, 1.05, 0.05);
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.05, 0.52, 10), bodyMat);
+    arm.position.y = -0.24; arm.castShadow = true;
+    pivot.add(arm);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8),
+      new THREE.MeshStandardMaterial({ color: accent, roughness: 0.4, metalness: 0.4 }));
+    hand.position.y = -0.5;
+    pivot.add(hand);
+    pivot.rotation.x = -0.9;
+    g.add(pivot);
+    arms.push(pivot);
+  });
+
+  // chair
+  const chair = new THREE.Group();
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.08, 0.55),
+    new THREE.MeshStandardMaterial({ color: 0x1a1e28, roughness: 0.7 }));
+  seat.position.y = 0.52; seat.castShadow = true;
+  chair.add(seat);
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.6, 0.07), seat.material);
+  back.position.set(0, 0.86, -0.26); back.castShadow = true;
+  chair.add(back);
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.5), deskMat);
+  post.position.y = 0.27; chair.add(post);
+  chair.position.z = 0.42;
+  g.add(chair);
+
+  return { group: g, arms, head: headGrp };
+}
+
+// keyboard + coffee on desk
+function deskProps(g) {
+  const kb = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.035, 0.2),
+    new THREE.MeshStandardMaterial({ color: 0x20242f, roughness: 0.6 }));
+  kb.position.set(0, 1.13, 0.32); g.add(kb);
+  const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.14, 12),
+    new THREE.MeshStandardMaterial({ color: 0xb3452e, roughness: 0.5 }));
+  cup.position.set(0.85, 1.18, 0.1); cup.castShadow = true; g.add(cup);
+}
+
+// ---------- team ----------
+const TEAM = [
+  { name: 'INSTINCT', role: 'THE LEAD',      color: 0xd4af37, accent: '#ffd75e', screen: '#ffd75e', x: 0,    z: -3.2, boss: true },
+  { name: 'GPT',      role: 'IDEAS',         color: 0x2f8f6e, accent: '#37d99a', screen: '#37d99a', x: -4.6, z: -0.6 },
+  { name: 'GEMINI',   role: 'IMAGES',        color: 0x3b6fd4, accent: '#6ea8ff', screen: '#6ea8ff', x: 4.6,  z: -0.6 },
+  { name: 'CLAUDE',   role: 'REVIEW',        color: 0xc47b4a, accent: '#ffa76e', screen: '#ffa76e', x: -4.6, z: 2.6 },
+  { name: 'MANUS',    role: 'DEEP RESEARCH', color: 0x8a5fd0, accent: '#bd8fff', screen: '#bd8fff', x: 4.6,  z: 2.6 },
+  { name: 'GROK',     role: 'CRITIC',        color: 0x9aa3b2, accent: '#e8ecf4', screen: '#e8ecf4', x: -8.6, z: 1.0 },
+  { name: 'MUSE',     role: 'ADVISOR',       color: 0xd05f8f, accent: '#ff8fc0', screen: '#ff8fc0', x: 8.6,  z: 1.0 },
+  { name: 'DEEPSEEK', role: 'REVIEWER',      color: 0x4a90c4, accent: '#7ec8ff', screen: '#7ec8ff', x: 0,    z: 4.4 },
+];
+
+const bots = [];
+window.__bots = bots;
+window.__textSprite = textSprite;
+TEAM.forEach((m, i) => {
+  const pod = new THREE.Group();
+  pod.position.set(m.x, 0, m.z);
+  pod.rotation.y = Math.atan2(m.x * 0.35, 6 - m.z) * 0.6; // face roughly toward center-front
+  const desk = makeDesk();
+  pod.add(desk);
+  deskProps(desk);
+  const mon = makeMonitor(codeTexture(m.screen, 1234 + i * 999));
+  mon.position.set(0, 1.06, -0.15);
+  desk.add(mon);
+  const bot = makeBot(m.color, m.accent);
+  bot.group.position.set(0, 0.12, 1.0);
+  bot.group.rotation.y = Math.PI;
+  pod.add(bot.group);
+  const tag = textSprite(m.name + (m.boss ? '  ★' : ''), { color: m.accent, glow: true, scale: m.boss ? 1.0 : 0.72 });
+  tag.position.set(0, 2.5, 0.6);
+  pod.add(tag);
+  const role = textSprite(m.role, { color: '#8b93a7', fontSize: 46, scale: 0.42 });
+  role.position.set(0, 2.2, 0.6);
+  pod.add(role);
+  room.add(pod);
+  bots.push({ bot, phase: i * 1.7, tag, role, name: m.name });
+});
+
+// ---------- wall boards: active projects ----------
+function boardTexture(title, lines, accent) {
+  return canvasTexture(1024, 576, (g, w, h) => {
+    g.fillStyle = '#0b0f18'; g.fillRect(0, 0, w, h);
+    g.strokeStyle = accent; g.lineWidth = 6; g.strokeRect(10, 10, w - 20, h - 20);
+    g.font = 'bold 64px Arial'; g.textAlign = 'left'; g.fillStyle = accent;
+    g.shadowColor = accent; g.shadowBlur = 18;
+    g.fillText(title, 50, 100);
+    g.shadowBlur = 0;
+    g.font = '40px Arial'; g.fillStyle = '#c6cddb';
+    lines.forEach((ln, i) => g.fillText('▸ ' + ln, 60, 190 + i * 78));
+  });
+}
+
+const PROJECTS = [
+  { title: 'ANATOMY SERIES', lines: ['16 posts reviewed', 'QR checked 3 sizes', '0 scientific errors'], accent: '#37d99a', x: -11.0 },
+  { title: 'BIOMECHANICS', lines: ['16 posts reviewed', 'Visual check done', 'Evidence current'], accent: '#ffa76e', x: -3.7 },
+  { title: 'ME COACHING APP', lines: ['Training + nutrition', 'Anatomy engine', 'Never stops'], accent: '#6ea8ff', x: 3.7 },
+  { title: 'DATA HARVEST', lines: ['160 research sources', 'Apps data extraction', 'Daily 9pm report'], accent: '#bd8fff', x: 11.0 },
+];
+PROJECTS.forEach(p => {
+  const t = boardTexture(p.title, p.lines, p.accent);
+  const b = new THREE.Mesh(new THREE.PlaneGeometry(6.9, 3.9), new THREE.MeshBasicMaterial({ map: t }));
+  b.position.set(p.x, 5.6, -12.9);
+  room.add(b);
+});
+
+// ME logo wall sign
+const logoTex = canvasTexture(1024, 320, (g, w, h) => {
+  g.clearRect(0, 0, w, h);
+  g.font = 'bold 190px Arial'; g.textAlign = 'center';
+  g.shadowColor = '#ffd75e'; g.shadowBlur = 40;
+  g.fillStyle = '#ffd75e';
+  g.fillText('ME', w / 2, 210);
+  g.shadowBlur = 0;
+  g.font = 'bold 44px Arial'; g.fillStyle = '#c9d2e8';
+  g.fillText('MAHMOUD ELMOHAMDY  •  AI TEAM', w / 2, 285);
+});
+const logo = new THREE.Mesh(new THREE.PlaneGeometry(9, 2.8), new THREE.MeshBasicMaterial({ map: logoTex, transparent: true }));
+logo.position.set(0, 9.6, -12.9);
+room.add(logo);
+
+// floating dust particles for depth
+const pGeo = new THREE.BufferGeometry();
+const pCount = 260;
+const pos = new Float32Array(pCount * 3);
+for (let i = 0; i < pCount; i++) {
+  pos[i * 3] = (Math.random() - 0.5) * 30;
+  pos[i * 3 + 1] = Math.random() * 9 + 0.5;
+  pos[i * 3 + 2] = (Math.random() - 0.5) * 22;
+}
+pGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+const particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x4a6a9f, size: 0.05, transparent: true, opacity: 0.6 }));
+scene.add(particles);
+
+// ---------- animation ----------
+function animate(t) {
+  bots.forEach(({ bot, phase }) => {
+    const tt = t * 2.2 + phase;
+    bot.arms[0].rotation.x = -0.9 + Math.sin(tt * 3.1) * 0.12;
+    bot.arms[1].rotation.x = -0.9 + Math.cos(tt * 2.7) * 0.12;
+    bot.head.rotation.y = Math.sin(tt * 0.5) * 0.22;
+    bot.head.position.y = 1.48 + Math.sin(tt * 1.4) * 0.02;
+  });
+  particles.rotation.y = t * 0.02;
+  blueGlow.intensity = 0.85 + Math.sin(t * 1.3) * 0.15;
+  warmGlow.intensity = 0.45 + Math.cos(t * 0.9) * 0.1;
+
+  // camera: slow arc around the room with gentle rise/fall
+  const a = t * 0.16;
+  const r = 13.5;
+  camera.position.set(Math.sin(a) * r, 6.2 + Math.sin(t * 0.23) * 0.7, Math.cos(a) * r + 2.5);
+  camera.lookAt(0, 1.7, -1.5);
+}
+
+function fitView() {
+  const a = window.innerWidth / window.innerHeight;
+  camera.aspect = a;
+  camera.fov = a < 1 ? Math.min(78, 52 / a) : 50;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+window.addEventListener('resize', fitView);
+fitView();
+let __start = performance.now();
+function loop() {
+  const t = (performance.now() - __start) / 1000;
+  animate(t);
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+
+<div id="hud">
+  <div id="hud-head"><span id="dot"></span> LIVE &mdash; ME AI TEAM</div>
+  <div id="hud-headline">Connecting&hellip;</div>
+  <div id="hud-rows"></div>
+  <div id="hud-hint">Tap to show the team &#9662;</div>
+  <div id="hud-updated"></div>
+</div>
+<div id="vignette"></div>
+<style>
+#hud{position:fixed;top:14px;left:14px;min-width:260px;max-width:340px;background:rgba(8,11,18,.78);border:1px solid rgba(110,168,255,.35);border-radius:10px;padding:12px 14px;font-family:Arial,sans-serif;color:#dfe6f5;backdrop-filter:blur(4px);z-index:10}
+#hud-head{font-size:12px;letter-spacing:2px;color:#9fb4dd;font-weight:bold}
+#dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#ff4d4d;margin-right:6px;animation:blink 1.2s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+#hud-headline{font-size:15px;font-weight:bold;color:#ffd75e;margin:8px 0 8px}
+.hud-row{display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;border-top:1px solid rgba(255,255,255,.06)}
+.hud-row b{color:#fff;min-width:74px}
+.hud-row span{color:#aab6cf;text-align:right;flex:1}
+.st-WORKING{color:#37d99a;font-weight:bold}
+.st-LIVE{color:#ff6b6b;font-weight:bold}
+.st-READY{color:#7c8aa5}
+#hud-updated{font-size:10px;color:#6b7794;margin-top:8px}
+#hud-hint{display:none;font-size:10px;color:#6b7794;margin-top:4px}
+@media (max-width:640px){
+#hud{top:auto;bottom:10px;left:10px;right:10px;min-width:0;max-width:none;padding:8px 12px;max-height:45vh;overflow-y:auto}
+#hud-headline{font-size:13px;margin:6px 0 2px}
+.hud-row{font-size:11px;padding:2px 0;flex-wrap:nowrap}
+.hud-row span{white-space:normal}
+#hud-rows{display:none}
+#hud.open #hud-rows{display:block}
+#hud-hint{display:block}
+#hud.open #hud-hint{display:none}
+#hud-updated{margin-top:4px}
+}
+</style>
+<script>
+const SHEET='1e2D1marR7Bq2D6SuvtKoT-iJOrt8XtS-eAZlrMh7nGw';
+const FALLBACK=[
+ ['OFFICE','Live board','Retrospective review: Physiology series','LIVE','offline snapshot'],
+ ['INSTINCT','The lead','Reviewing the Physiology series page by page','WORKING',''],
+ ['GPT','Ideas','Post ideas and prompt writing','READY',''],
+ ['GEMINI','Images','Image generation and enhancement','READY',''],
+ ['MANUS','Deep research','Heavy research for the data system','READY',''],
+ ['GROK','Critic','Content critique before publishing','READY',''],
+ ['MUSE','Advisor','Science questions and stuck points','READY',''],
+ ['CLAUDE','Code fixer','App fixes and code review','READY',''],
+ ['DEEPSEEK','Reviewer','Reviewing analyses and conclusions','READY','']];
+const AGENT_COLORS={"INSTINCT": "#ffd75e", "GPT": "#37d99a", "GEMINI": "#6ea8ff", "MANUS": "#bd8fff", "GROK": "#e8ecf4", "MUSE": "#ff8fc0", "CLAUDE": "#ffa76e", "DEEPSEEK": "#7ec8ff"};
+function renderHud(rows){
+  const office=rows.find(r=>r[0]==='OFFICE');
+  if(office) document.getElementById('hud-headline').textContent=office[2];
+  const box=document.getElementById('hud-rows'); box.innerHTML='';
+  rows.filter(r=>r[0]!=='OFFICE'&&r[0]!=='Agent').forEach(r=>{
+    const d=document.createElement('div'); d.className='hud-row';
+    d.innerHTML='<span class="agent"><span class="cdot" style="background:'+(AGENT_COLORS[r[0]]||'#8fa3cc')+';box-shadow:0 0 6px '+(AGENT_COLORS[r[0]]||'#8fa3cc')+'"></span>'+r[0]+'</span><span class="task">'+r[2]+'</span><span class="pill pill-'+r[3]+'">'+r[3]+'</span>';
+    box.appendChild(d);
+  });
+  const upd=rows.map(r=>r[4]).filter(Boolean).pop();
+  document.getElementById('hud-updated').textContent=upd?('Updated '+upd+' \u00b7 refreshes every 30s'):'offline snapshot';
+  // update 3D desk task lines
+  if(window.__bots){ window.__bots.forEach(b=>{
+    const row=rows.find(r=>r[0]===b.name);
+    if(row&&b.role){ b.role.material.map=window.__textSprite(row[3]==='WORKING'?row[2].slice(0,26).toUpperCase():row[1],{color:row[3]==='WORKING'?'#37d99a':'#8b93a7',fontSize:40,scale:0.42}).material.map; b.role.material.needsUpdate=true; }
+  }); }
+}
+async function poll(){
+  try{
+    const r=await fetch('https://docs.google.com/spreadsheets/d/'+SHEET+'/gviz/tq?tqx=out:json&headers=1',{cache:'no-store'});
+    const txt=await r.text();
+    const json=JSON.parse(txt.substring(txt.indexOf('{'),txt.lastIndexOf('}')+1));
+    const rows=json.table.rows.map(r=>r.c.map(c=>c?(c.f||c.v||''):''));
+    renderHud(rows);
+  }catch(e){ renderHud(FALLBACK); }
+}
+poll(); setInterval(poll,30000);
+document.getElementById('hud').addEventListener('click',function(){this.classList.toggle('open');});
+</script>
+</body>
+</html>
